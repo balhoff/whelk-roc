@@ -1,6 +1,6 @@
 app "whelk"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.2.1/wx1N6qhU3kKva-4YqsVJde3fho34NqiLD3m620zZ-OI.tar.br" }
-    imports [pf.Stdout]
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
+    imports [pf.Stdout, LinkedList.{ LinkedList }]
     provides [main] to pf
 
 main =
@@ -8,41 +8,18 @@ main =
         ConceptInclusion { subclass: AtomicConcept "A", superclass: AtomicConcept "B" },
         ConceptInclusion { subclass: AtomicConcept "B", superclass: AtomicConcept "C" },
     ]
-    state = {
-        prop: Dict.single owl.bottom (Set.empty {}),
-    }
-    # state = {
-    #     todo : Nil,
-    #     hier: Dict.empty {},
-    #     hierList: Dict.empty {},
-    #     hierComps: Dict.empty {},
-    #     assertions: Nil,
-    #     inits: Set.empty {},
-    #     assertedConceptInclusionsBySubclass: Dict.empty {},
-    #     closureSubsBySuperclass: Dict.single (owl.bottom) (Set.empty {}),
-    #     #closureSubsBySubclass: Dict.single owl.top (Set.empty {}),
-    #     assertedNegConjs: Set.empty {},
-    #     assertedNegConjsByOperandRight: Dict.empty {},
-    #     assertedNegConjsByOperandLeft: Dict.empty {},
-    #     linksBySubject: Dict.empty {},
-    #     linksByTarget: Dict.empty {},
-    #     negExistsMapByConcept: Dict.empty {},
-    #     propagations: Dict.empty {},
-    # }
-    dbg
-        state
+    state = assert axioms
+    out = Dict.walk state.closureSubsBySubclass "" \output, subclass, superclasses ->
+        when subclass is
+            AtomicConcept sub ->
+                Set.walk superclasses output \accum, superclass ->
+                    when superclass is
+                        AtomicConcept sup -> Str.concat accum "\(sub) SubClassOf \(sup)\n"
+                        _ -> accum
 
-    # state = assert axioms
-    # state = emptyState
-    # out = Dict.walk state.closureSubsBySubclass "" \output, subclass, superclasses ->
-    #     when subclass is
-    #         AtomicConcept sub ->
-    #             Set.walk superclasses output \accum, superclass ->
-    #                 when superclass is
-    #                     AtomicConcept sup -> Str.concat accum "\(sub) SubClassOf \(sup)\n"
-    #                     _ -> accum
-    #         _ -> output
-    Stdout.line (Num.toStr (Set.len axioms))
+            _ -> output
+    # _ <- Task.await (Stdout.line (Num.toStr (Set.len axioms)))
+    Stdout.line out
 
 Role : [Role Str]
 
@@ -86,21 +63,6 @@ QueueItem : [
     Link Concept Role Concept,
 ]
 
-LinkedList a : [Nil, Cons { first : a, rest : LinkedList a }]
-push : LinkedList a, a -> LinkedList a
-push = \list, item -> Cons { first: item, rest: list }
-linkedToList : LinkedList a -> List a
-linkedToList = \list ->
-    when list is
-        Nil -> []
-        Cons { first, rest } -> List.prepend (linkedToList rest) first
-
-getOrElse : Dict k v, k, v -> v
-getOrElse = \dict, key, defaultValue ->
-    when Dict.get dict key is
-        Ok value -> value
-        Err _ -> defaultValue
-
 signature : Concept -> Set Entity
 signature = \concept ->
     when concept is
@@ -111,9 +73,9 @@ signature = \concept ->
 conceptSignature : Concept -> Set Concept
 conceptSignature = \concept ->
     when concept is
-        AtomicConcept id -> Set.single concept
+        AtomicConcept _ -> Set.single concept
         Conjunction { left, right } -> Set.union (conceptSignature left) (conceptSignature right) |> Set.union (Set.single concept)
-        ExistentialRestriction { role: Role id, concept: filler } -> Set.union (conceptSignature filler) (Set.single concept)
+        ExistentialRestriction { concept: filler } -> Set.union (conceptSignature filler) (Set.single concept)
 
 axiomSignature : Axiom -> Set Entity
 axiomSignature = \axiom ->
@@ -143,11 +105,11 @@ State : {
 
 emptyState : State
 emptyState = {
-    todo: Nil,
+    todo: LinkedList.empty {},
     hier: Dict.empty {},
     hierList: Dict.empty {},
     hierComps: Dict.empty {},
-    assertions: Nil,
+    assertions: LinkedList.empty {},
     inits: Set.empty {},
     assertedConceptInclusionsBySubclass: Dict.empty {},
     closureSubsBySuperclass: Dict.single owl.bottom (Set.empty {}),
@@ -164,16 +126,17 @@ emptyState = {
 assert : Set Axiom -> State
 assert = \axioms ->
     axiomsList = Set.toList axioms
-    allRoles = List.joinMap axiomsList \ax -> Set.toList (axiomSignature ax)
-        |> List.keepOks \e ->
-            when e is
-                Role id -> Ok (Role id)
-                _ -> Err {}
+    allRoles = Set.walk axioms (Set.empty {}) \rs, ax ->
+        axiomSignature ax
+        |> Set.walk rs \rs2, entity ->
+            when entity is
+                Role id -> Set.insert rs2 (Role id)
+                _ -> rs2
     allRoleInclusions = List.keepOks axiomsList \ax ->
         when ax is
             RoleInclusion ri -> Ok ri
             _ -> Err {}
-    hier = List.walk allRoles (saturateRoles allRoleInclusions) \accum, role ->
+    hier = Set.walk allRoles (saturateRoles allRoleInclusions) \accum, role ->
         Dict.update accum role \possibleValue ->
             when possibleValue is
                 Missing -> Present (Set.single role)
@@ -201,16 +164,15 @@ extend = \axioms, state ->
             when concept is
                 AtomicConcept _ -> Ok (Conc concept)
                 _ -> Err {}
-    acLinkedList = List.walk atomicConcepts Nil \accum, ac -> push accum ac
-    assertions = List.concat axioms (linkedToList state.assertions) |> List.walk Nil \accum, ax -> push accum ax
-    computeClosure { state & assertions: assertions, todo: acLinkedList }
+    assertions = LinkedList.concat state.assertions (LinkedList.fromList axioms)
+    computeClosure { state & assertions: assertions, todo: LinkedList.fromList atomicConcepts }
 
 computeClosure : State -> State
 computeClosure = \state ->
-    when state.assertions is
+    when LinkedList.pop state.assertions is
         Cons { first, rest } -> processAssertedConceptInclusion first { state & assertions: rest } |> computeClosure
         Nil ->
-            when state.todo is
+            when LinkedList.pop state.todo is
                 Cons { first, rest } -> process first { state & todo: rest } |> computeClosure
                 Nil -> state
 
@@ -236,11 +198,40 @@ process = \item, state ->
         Conc concept -> processConcept concept state
 
 processLink = \subject, role, target, state ->
-    crash "processLink"
+    rolesToTargets = Dict.get state.linksBySubject subject |> Result.withDefault (Dict.empty {})
+    targetsSet = Dict.get rolesToTargets role |> Result.withDefault (Set.empty {})
+    if Set.contains targetsSet target then
+        state
+    else
+        updatedTargetsSet = Set.insert targetsSet target
+        updatedRolesToTargets = Dict.insert rolesToTargets role updatedTargetsSet
+        linksBySubject = Dict.insert state.linksBySubject subject updatedRolesToTargets
+        # rolesToSubjects = Dict.get state.linksByTarget target |> Result.withDefault (Dict.empty {})
+        # subjects = Dict.get rolesToSubjects role |> Result.withDefault []
+        # updatedSubjects = List.append subjects subject
+        # updatedRolesToSubjects = Dict.insert rolesToSubjects role updatedSubjects
+        # linksByTarget = Dict.insert state.linksByTarget target updatedRolesToSubjects
+        linksByTarget = Dict.update state.linksByTarget target \possibleRolesToSubjects ->
+            when possibleRolesToSubjects is
+                Missing -> Present (Dict.single role [subject])
+                Present rolesToSubjects ->
+                    Present
+                        (
+                            Dict.update rolesToSubjects role \possibleSubjects ->
+                                when possibleSubjects is
+                                    Missing -> Present [subject]
+                                    Present subjects -> Present (List.append subjects subject)
+                        )
+        { state & linksBySubject: linksBySubject, linksByTarget: linksByTarget }
+        |> rBottomRight subject role target
+        |> rPlusSomeRight subject role target
+        |> rRingRight subject role target
+        |> rRingLeft subject role target
+        |> rSquiggle subject role target
 
 processSub = \subclass, superclass, state ->
     emptySubClassSet = Set.single owl.bottom
-    subs = getOrElse state.closureSubsBySuperclass superclass emptySubClassSet
+    subs = Dict.get state.closureSubsBySuperclass superclass |> Result.withDefault emptySubClassSet
     if Set.contains subs subclass then
         state
     else
@@ -253,7 +244,18 @@ processSub = \subclass, superclass, state ->
         |> rBottomLeft subclass superclass
 
 processSubPlus = \subclass, superclass, state ->
-    crash "processSubPlus"
+    emptySubClassSet = Set.single owl.bottom
+    subs = Dict.get state.closureSubsBySuperclass superclass |> Result.withDefault emptySubClassSet
+    if Set.contains subs subclass then
+        state
+    else
+        closureSubsBySuperclass = Dict.insert state.closureSubsBySuperclass superclass (Set.insert subs subclass)
+        closureSubsBySubclass = Dict.update state.closureSubsBySubclass subclass \possibleSupers ->
+            when possibleSupers is
+                Missing -> Present (Set.single superclass)
+                Present supers -> Present (Set.insert supers superclass)
+        { state & closureSubsBySubclass: closureSubsBySubclass, closureSubsBySuperclass: closureSubsBySuperclass }
+        |> rBottomLeft subclass superclass
 
 processConcept = \concept, state ->
     if Set.contains state.inits concept then
@@ -267,30 +269,42 @@ processConcept = \concept, state ->
         |> r0 concept
         |> rTop concept
 
-r0 = \state, concept -> { state & todo: push state.todo (Sub concept concept) }
+r0 = \state, concept -> { state & todo: LinkedList.push state.todo (Sub concept concept) }
 
-rTop = \state, concept -> { state & todo: push state.todo (Sub concept owl.top) }
+rTop = \state, concept -> { state & todo: LinkedList.push state.todo (Sub concept owl.top) }
 
+rSubLeft : State, ConceptInclusion -> State
 rSubLeft = \state, ci ->
     todo =
-        getOrElse state.closureSubsBySuperclass ci.subclass (Set.empty {})
-        |>
-        Set.walk state.todo \accum, other ->
-            push accum (Sub other ci.superclass)
+        Dict.get state.closureSubsBySuperclass ci.subclass
+        |> Result.withDefault (Set.empty {})
+        |> Set.walk state.todo \accum, other ->
+            LinkedList.push accum (Sub other ci.superclass)
     { state & todo: todo }
 
+rBottomLeft : State, Concept, Concept -> State
 rBottomLeft = \state, subclass, superclass ->
     if superclass == owl.bottom then
         todo =
-            getOrElse state.linksByTarget subclass (Dict.empty {})
-            |>
-            Dict.walk state.todo \accum, _, subjects ->
+            Dict.get state.linksByTarget subclass
+            |> Result.withDefault (Dict.empty {})
+            |> Dict.walk state.todo \accum, _, subjects ->
                 List.walk subjects accum \accum2, subject ->
-                    push accum2 (Sub subject owl.bottom)
+                    LinkedList.push accum2 (Sub subject owl.bottom)
         { state & todo: todo }
     else
         state
 
+rBottomRight : State, Concept, Role, Concept -> State
+rBottomRight = \state, subject, _role, target ->
+    unsatisfiable = Dict.get state.closureSubsBySuperclass owl.bottom |> Result.withDefault (Set.empty {})
+    if Set.contains unsatisfiable target then
+        todo = LinkedList.push state.todo (Sub subject owl.bottom)
+        { state & todo: todo }
+    else
+        state
+
+rPlusAndA : State, ConceptInclusion -> State
 rPlusAndA = \state, ci ->
     newNegativeConjunctions =
         conceptSignature ci.subclass
@@ -299,8 +313,127 @@ rPlusAndA = \state, ci ->
             when concept is
                 Conjunction conj if !(Set.contains state.assertedNegConjs conj) -> Ok conj
                 _ -> Err {}
-    # FIXME
-    crash "rPlusAndA"
+    updatedAssertedNegConjs = Set.union state.assertedNegConjs (Set.fromList newNegativeConjunctions)
+    (updatedByLeft, updatedByRight) = List.walk newNegativeConjunctions (state.assertedNegConjsByOperandLeft, state.assertedNegConjsByOperandRight) \(accumLeft, accumRight), conj ->
+        updatedAssertedNegConjsByOperandLeft = Dict.update accumLeft conj.left \possibleByRightForLeft ->
+            when possibleByRightForLeft is
+                Missing -> Present (Dict.single conj.right conj)
+                Present byRightForLeft -> Present (Dict.insert byRightForLeft conj.right conj)
+        updatedAssertedNegConjsByOperandRight = Dict.update accumRight conj.right \possibleByLeftForRight ->
+            when possibleByLeftForRight is
+                Missing -> Present (Dict.single conj.left conj)
+                Present byLeftForRight -> Present (Dict.insert byLeftForRight conj.left conj)
+        (updatedAssertedNegConjsByOperandLeft, updatedAssertedNegConjsByOperandRight)
+    rPlusAndB
+        { state &
+            assertedNegConjs: updatedAssertedNegConjs,
+            assertedNegConjsByOperandLeft: updatedByLeft,
+            assertedNegConjsByOperandRight: updatedByRight,
+        }
+        newNegativeConjunctions
+
+rPlusAndB : State, List Conjunction -> State
+rPlusAndB = \state, newNegativeConjunctions ->
+    todo =
+        todos1, conjunction <- List.walk newNegativeConjunctions state.todo
+        leftSubclasses = Dict.get state.closureSubsBySubclass conjunction.left |> Result.withDefault (Set.empty {})
+        rightSubclasses = Dict.get state.closureSubsBySuperclass conjunction.right |> Result.withDefault (Set.empty {})
+        common = Set.intersection leftSubclasses rightSubclasses
+        todos2, c <- Set.walk common todos1
+        LinkedList.push todos2 (SubPlus c (Conjunction conjunction))
+    { state & todo: todo }
+
+# var newPropagations: List[(Concept, ExistentialRestriction)] = Nil
+# var propagations = reasoner.propagations
+# val ers = reasoner.negExistsMapByConcept.getOrElse(ci.superclass, Set.empty)
+# for {
+#   er <- ers
+# } {
+#   newPropagations = (ci.subclass, er) :: newPropagations
+#   val current = propagations.getOrElse(ci.subclass, Map.empty)
+#   val newList = er :: current.getOrElse(er.role, Nil)
+#   propagations = propagations.updated(ci.subclass, current.updated(er.role, newList))
+# }
+# `R+∃left`(newPropagations, reasoner.copy(propagations = propagations), todo)
+rPlusSomeBRight : State, Concept, Concept -> State
+rPlusSomeBRight = \state, subclass, superclass ->
+    ers = Dict.get state.negExistsMapByConcept superclass |> Result.withDefault (Set.empty {})
+    Set.walk ers state \state1, er ->
+        updatedPropagations = Dict.update state.propagations subclass \possibleProps ->
+            when possibleProps is
+                Missing -> Present (Dict.single er.role [er])
+                Present props ->
+                    Present
+                        (
+                            Dict.update props er.role \possibleERs ->
+                                when possibleERs is
+                                    Missing -> Present [er]
+                                    Present propERs -> Present (List.append propERs er)
+                        )
+        rPlusSomeLeft { state1 & propagations: updatedPropagations } subclass er
+
+rPlusSomeLeft : State, Concept, ExistentialRestriction -> State
+rPlusSomeLeft = \state, concept, er ->
+    todo =
+        todos1, role, subjects <- Dict.get state.linksByTarget concept |> Result.withDefault (Dict.empty {}) |> Dict.walk state.todo
+        superProperties = Dict.get state.hier role |> Result.withDefault (Set.empty {})
+        if Set.contains superProperties er.role then
+            todos2, subject <- List.walk subjects todos1
+            LinkedList.push todos2 (SubPlus subject (ExistentialRestriction er))
+        else
+            todos1
+    { state & todo: todo }
+
+# rPlusSomeLeft : State, List[Propagation Concept ExistentialRestriction] -> State
+# rPlusSomeLeft = \state, newPropagations ->
+#     todo =
+#         todos1, Propagation concept er <- List.walk newPropagations state.todo
+#         todos2, role, subjects <- Dict.get state.linksByTarget concept |> Result.withDefault (Dict.empty {}) |> Dict.walk todos1
+#         superProperties = Dict.get state.hier role |> Result.withDefault (Set.empty {})
+#         if Set.contains superProperties er.role then
+#             todos3, subject <- List.walk subjects todos2
+#             push todos3 (SubPlus subject (ExistentialRestriction er))
+#         else todos2
+#     { state & todo: todo }
+
+rPlusSomeRight : State, Concept, Role, Concept -> State
+rPlusSomeRight = \state, subject, role, target ->
+    roleToER = Dict.get state.propagations target |> Result.withDefault (Dict.empty {})
+    todo =
+        todos1, s <- Dict.get state.hierList role |> Result.withDefault [] |> List.walk state.todo
+        todos2, f <- Dict.get roleToER s |> Result.withDefault [] |> List.walk todos1
+        LinkedList.push todos2 (SubPlus subject (ExistentialRestriction f))
+    { state & todo: todo }
+
+rRingLeft : State, Concept, Role, Concept -> State
+rRingLeft = \state, subject, role, target ->
+    todo =
+        todos1, r1, es <- Dict.get state.linksByTarget subject |> Result.withDefault (Dict.empty {}) |> Dict.walk state.todo
+        r1s = Dict.get state.hierComps r1 |> Result.withDefault (Dict.empty {})
+        todos2, s <- Dict.get r1s role |> Result.withDefault [] |> List.walk todos1
+        todos3, e <- List.walk es todos2
+        LinkedList.push todos3 (Link e s target)
+    { state & todo: todo }
+
+rRingRight : State, Concept, Role, Concept -> State
+rRingRight = \state, subject, role, target ->
+    r2s = Dict.get state.hierComps role |> Result.withDefault (Dict.empty {})
+    linksByLinkSubject = Dict.get state.linksBySubject subject |> Result.withDefault (Dict.empty {})
+    todo =
+        todos1, r2, targets <- Dict.get state.linksBySubject target |> Result.withDefault (Dict.empty {}) |> Dict.walk state.todo
+        todos2, s <- Dict.get r2s r2 |> Result.withDefault [] |> List.walk todos1
+        linksWithS = Dict.get linksByLinkSubject s |> Result.withDefault (Set.empty {})
+        todos3, d <- Set.walk targets todos2
+        if !(Set.contains linksWithS d) then
+            LinkedList.push todos3 (Link subject s d)
+        else
+            todos3
+    { state & todo: todo }
+
+rSquiggle : State, Concept, Role, Concept -> State
+rSquiggle = \state, _subject, _role, target ->
+    todo = LinkedList.push state.todo (Conc target)
+    { state & todo: todo }
 
 saturateRoles : List RoleInclusion -> Dict Role (Set Role)
 saturateRoles = \roleInclusions ->
@@ -312,7 +445,7 @@ saturateRoles = \roleInclusions ->
     allSupers : Role, Set Role -> Set Role
     allSupers = \role, exclude ->
         currentExclude = Set.insert exclude role
-        superProps = getOrElse subToSuper role (Set.empty {})
+        superProps = Dict.get subToSuper role |> Result.withDefault (Set.empty {})
         Set.walk superProps (Set.empty {}) \accum, superProp ->
             if Set.contains currentExclude superProp then
                 accum
@@ -323,43 +456,39 @@ saturateRoles = \roleInclusions ->
 
 indexRoleCompositions : Dict Role (Set Role), List RoleComposition -> Dict Role (Dict Role (List Role))
 indexRoleCompositions = \hier, chains ->
+    roleComps : Dict { first : Role, second : Role } (Set Role)
     roleComps = List.walk chains (Dict.empty {}) \accum, { first, second, superproperty } ->
         Dict.update accum { first, second } \possibleValue ->
             when possibleValue is
                 Missing -> Present (Set.single superproperty)
                 Present superProperties -> Present (Set.insert superProperties superproperty)
-    hierCompsTuples : Set [T Role Role Role]
-    hierCompsTuples =
+
+    hierCompsTuples : Set (Role, Role, Role)
+    hierCompsTuples = Set.fromList
         (
-            Dict.toList hier
-            |> List.joinMap \T r1 s1s ->
-                Set.toList s1s
-                |> List.joinMap \s1 ->
-                    Dict.toList hier
-                    |> List.joinMap \T r2 s2s ->
-                        Set.toList s2s
-                        |> List.joinMap \s2 ->
-                            getOrElse roleComps { first: s1, second: s2 } (Set.empty {})
-                            |> Set.toList
-                            |> List.map \s ->
-                                T r1 r2 s
+            (r1, s1s) <- hier |> Dict.toList |> List.joinMap
+            s1 <- s1s |> Set.toList |> List.joinMap
+            (r2, s2s) <- hier |> Dict.toList |> List.joinMap
+            s2 <- s2s |> Set.toList |> List.joinMap
+            s <- Dict.get roleComps { first: s1, second: s2 } |> Result.withDefault (Set.empty {}) |> Set.toList |> List.map
+            (r1, r2, s)
         )
-        |> Set.fromList
     hierCompsRemove =
         (
             Set.toList hierCompsTuples
-            |> List.joinMap \T r1 r2 s ->
-                getOrElse hier s (Set.empty {})
+            |> List.joinMap \(r1, r2, s) ->
+                Dict.get hier s
+                |> Result.withDefault (Set.empty {})
                 |> Set.toList
                 |> List.joinMap \superS ->
-                    if (superS != s) && (Set.contains hierCompsTuples (T r1 r2 superS)) then
-                        [T r1 r2 superS]
+                    if (superS != s) && (Set.contains hierCompsTuples (r1, r2, superS)) then
+                        [(r1, r2, superS)]
                     else
                         []
         )
         |> Set.fromList
     hierCompsFiltered = Set.difference hierCompsTuples hierCompsRemove
-    Set.walk hierCompsFiltered (Dict.empty {}) \accum, T r1 r2 s ->
+    Set.walk hierCompsFiltered (Dict.empty {}) \accum, (r1, r2, s) ->
         Dict.update accum r1 \possibleDict ->
             when possibleDict is
                 Missing -> Present (Dict.single r2 [s])

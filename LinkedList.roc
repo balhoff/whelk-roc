@@ -76,6 +76,6 @@ expect concat (push (push (single 3) 2) 1) (push (push (single 6) 5) 4) == (push
 expect len (push (push (single 3) 2) 1) == 3
 expect len (single 0) == 1
 expect len (empty {}) == 0
-expect pop (push (push (single 3) 2) 1) == Cons { first: 1, rest: (push (single 3) 2) }
-expect pop (single 0) == Cons { first: 0, rest: (empty {}) }
+expect pop (push (push (single 3) 2) 1) == Cons { first: 1, rest: push (single 3) 2 }
+expect pop (single 0) == Cons { first: 0, rest: empty {} }
 expect pop (empty {}) == Nil

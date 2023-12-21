@@ -3,7 +3,7 @@ interface WhelkReasoner
         State,
         emptyState,
         assert,
-        extend
+        extend,
     ]
     imports [
         LinkedList.{ LinkedList },
@@ -136,6 +136,7 @@ process = \item, state ->
         SubPlus subclass superclass -> processSubPlus subclass superclass state
         Conc concept -> processConcept state concept
 
+processLink : Concept, Role, Concept, State -> State
 processLink = \subject, role, target, state ->
     rolesToTargets = Dict.get state.linksBySubject subject |> Result.withDefault (Dict.empty {})
     targetsSet = Dict.get rolesToTargets role |> Result.withDefault (Set.empty {})
@@ -164,6 +165,7 @@ processLink = \subject, role, target, state ->
         |> rSquiggle subject role target
 # |> rPlusSelfNominal subject role target
 
+processSub : Concept, Concept, State -> State
 processSub = \subclass, superclass, state ->
     emptySubClassSet = Set.single owl.bottom
     subs = Dict.get state.closureSubsBySuperclass superclass |> Result.withDefault emptySubClassSet
@@ -187,6 +189,7 @@ processSub = \subclass, superclass, state ->
 # |> rPlusSelf subclass superclass
 # |> rOrRight subclass superclass
 
+processSubPlus : Concept, Concept, State -> State
 processSubPlus = \subclass, superclass, state ->
     emptySubClassSet = Set.single owl.bottom
     subs = Dict.get state.closureSubsBySuperclass superclass |> Result.withDefault emptySubClassSet
